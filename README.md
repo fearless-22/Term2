@@ -1,13 +1,13 @@
 # 1.custom_bot.urdf
 AI写的机器人配置文件
-## 加载Turtlebot3场景及机器人
+## 加载Turtlebot3场景及机器人(前三周任务)
 ### 终端1
 ``` bash
 # 1. 告诉 Gazebo 去哪儿找 TB3 的模型
 export GAZEBO_MODEL_PATH=$GAZEBO_MODEL_PATH:/opt/ros/humble/share/turtlebot3_gazebo/models
 
 # 2. 尝试启动世界 (放在后台)
-source /opt/ros/humble/setup.bash #激活ros2环境,如果不想每个终端内都敲一遍,课写进.bashrc文件
+source /opt/ros/humble/setup.bash #激活ros2环境,如果不想每个终端内都敲一遍,可写进.bashrc文件
 gazebo /opt/ros/humble/share/turtlebot3_gazebo/worlds/turtlebot3_world.world -s libgazebo_ros_init.so -s libgazebo_ros_factory.so &
 
 # 3.加载机器人(确保当前目录下有custom_bot.urdf文件)
