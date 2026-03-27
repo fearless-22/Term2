@@ -1,6 +1,8 @@
-# 1.custom_bot.urdf
+# 前三周任务：Gazebo+Rviz2:加载场景及机器人
+## custom_bot.urdf
 AI写的机器人配置文件
-## 加载Turtlebot3场景及机器人(前三周任务)
+可从仓库下载至本地
+## 命令行启动Gazebo+Rviz2
 ### 终端1
 ``` bash
 # 1. 告诉 Gazebo 去哪儿找 TB3 的模型
@@ -27,4 +29,19 @@ source /opt/ros/humble/setup.bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
 
-
+# 第四周任务：输出机器人状态信息
+## RobotStateMonitor.py
+机器人状态信息监控及广播脚本
+加载场景及机器人后终端输入
+``` bash
+python3 RobotStateMonitor.py
+#示例输出:
+[INFO] [1774603425.211133688] [robot_state_monitor]: State Update:
+{
+  "pose": {
+    "x": -2.0118343513338512,
+    "y": -0.7696763376050626
+  },
+  "battery": 100.0
+}
+```
