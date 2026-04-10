@@ -1,0 +1,10 @@
+slam_toolbox:
+  ros__parameters:
+    use_sim_time: true
+    mode: 'mapping' # 核心模式：启用建图
+    scan_topic: '/scan' # 必须与仿真器话题一致
+    use_scan_matching: true
+    max_particles: 100
+    odom_frame: 'odom'
+    map_frame: 'map'
+    base_frame: 'base_link'
