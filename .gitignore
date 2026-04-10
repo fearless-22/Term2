@@ -1,0 +1,4 @@
+# 忽略 ROS 2 的编译产物
+ros2_slam_ws/build/
+ros2_slam_ws/install/
+ros2_slam_ws/log/
