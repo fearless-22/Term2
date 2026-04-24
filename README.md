@@ -2,7 +2,7 @@
 
 ## custom_bot.urdf
 
-AI写的机器人配置文件
+AI写的机器人配置文件  
 可从仓库下载至本地
 
 ## 命令行启动Gazebo+Rviz2
@@ -19,6 +19,7 @@ killall -9 gzserver gzclient #  清除先前开启的gazebo线程
 gazebo /opt/ros/humble/share/turtlebot3_gazebo/worlds/turtlebot3_world.world -s libgazebo_ros_init.so -s libgazebo_ros_factory.so &
 
 # 3.加载机器人(确保当前目录下有custom_bot.urdf文件)
+# 两条命令需一起执行
 ros2 run gazebo_ros spawn_entity.py -entity my_custom_bot -file custom_bot.urdf -x -2.0 -y -0.5 -z 0.2 &
 ros2 run robot_state_publisher robot_state_publisher custom_bot.urdf
 ```
@@ -43,7 +44,7 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 
 ## RobotStateMonitor.py
 
-机器人状态信息监控及广播脚本
+机器人状态信息监控及广播脚本  
 加载场景及机器人后终端输入
 
 ``` bash
@@ -80,14 +81,16 @@ sudo apt install ros-humble-teleop-twist-keyboard
 
 ## 3.启动建图
 
-先启动仿真世界，加载小车(见上文)
+先启动仿真世界，加载小车(见上文)  
 激活SLAM算法，新开终端：
 
 ``` bash
 cd ros2_slam_ws
+source install/setup.bash
 ros2 launch custom_slam slam_launch.py
+#如果要重新建图,在当前终端下按 Ctrl + C 终止进程，然后重新运行启动命令
 ```
 
-参考手册配置rviz2窗口
-打开遥控终端控制小车移动(见上文)
-注意速度要很低，保证建图效果
+参考手册配置rviz2窗口  
+打开遥控终端控制小车移动(见上文)  
+注意速度要很低，保证建图效果  
