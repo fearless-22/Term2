@@ -4,7 +4,9 @@
 ```
 #前置：下载cartographer
 sudo apt update
-sudo apt install ros-humble-gazebo-ros-pkgs ros-humble-cartographer-ros ros-humble-nav2-bringup ros-humble-teleop-twist-keyboard
+sudo apt install ros-humble-cartographer
+sudo apt install ros-humble-cartographer-ros
+
 #打开终端
 cd custom_bot_ws
 #编译(对里面文件修改均需重新编译)
