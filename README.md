@@ -1,3 +1,39 @@
+### 任务整合（到建图）
+在linux中解压文件custom_car.tar.gz得到custom_bot_ws文件夹
+
+```
+#前置：下载cartographer
+sudo apt update
+sudo apt install ros-humble-gazebo-ros-pkgs ros-humble-cartographer-ros ros-humble-nav2-bringup ros-humble-teleop-twist-keyboard
+#打开终端
+cd custom_bot_ws
+#编译(对里面文件修改均需重新编译)
+colcon build --symlink-install
+#初始化
+source install/setup.bash
+#执行launch启动
+ros2 launch custom_nav_pkg slam_launch.py
+#在 RViz2 中，添加几个组件观察：
+#添加 Map 组件，将 Topic 设为 /map。
+#添加 LaserScan 组件，将 Topic 设为 /scan。
+#添加 RobotModel 组件，以显示你的小车模型。
+确保全局的 Fixed Frame 设置为 odom或者map。
+
+#新开终端控制小车
+source ~/custom_bot_ws/install/setup.bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+
+#建完保存地图(新开终端)
+cd custom_bot_ws/src/custom_nav_pkg/outputs
+ros2 run nav2_map_server map_saver_cli -f map_1
+```
+
+
+
+
+
+***
+
 # 前三周任务：Gazebo+Rviz2:加载场景及机器人
 
 ## custom_bot.urdf
