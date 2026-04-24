@@ -1,5 +1,5 @@
 ### 任务整合（到建图）
-在linux中解压文件custom_car.tar.gz得到custom_bot_ws文件夹
+在linux中解压文件custom_car.tar.gz得到custom_car文件夹,把里面的custom_bot_ws文件夹单独拿出来
 
 ```
 #前置：下载cartographer
@@ -10,6 +10,7 @@ sudo apt install ros-humble-cartographer-ros
 #打开终端
 cd custom_bot_ws
 #编译(对里面文件修改均需重新编译)
+rm -rf build/install/log/
 colcon build --symlink-install
 #初始化
 source install/setup.bash
