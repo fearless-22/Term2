@@ -32,6 +32,8 @@ This document maps the current workspace to the courseware requirements in
 - `embodied-sim-lite/sim_ros2_bridgeV1.0.py` bridges the Web simulation to ROS2:
   it subscribes `/cmd_vel` and `/cmd_vel_nav`, publishes `/odom` and `/scan`,
   and broadcasts `odom -> base_footprint -> base_link -> laser_frame`.
+  It also publishes `/scan_nav` for dynamic obstacle avoidance and red RViz
+  marker rays on `/scan_rays` and `/scan_nav_rays`.
 
 ## 2. What Was Missing Before This Completion Step
 
@@ -93,6 +95,8 @@ The required FSM states and recovery behavior were also absent:
 - `config/nav2_web_params.yaml`
   - Based on the existing Nav2 config.
   - Changes all `use_sim_time` values to false for the Web bridge.
+  - Uses `/scan_nav` for the local costmap so moving obstacles are temporary
+    avoidance targets instead of permanent SLAM map obstacles.
 - `config/exploration_params.yaml`
   - Controls frontier size, goal interval, information gain radius and scoring.
 - `config/system_params.yaml`
@@ -163,6 +167,8 @@ RViz2 display checklist:
 - Global Options: `Fixed Frame = map`
 - Add `Map`: `/map`
 - Add `LaserScan`: `/scan`, Reliability = `Best Effort`, Durability = `Volatile`
+- Add `LaserScan`: `/scan_nav`, Reliability = `Best Effort`, Durability = `Volatile`
+- Add `Marker`: `/scan_nav_rays` for red full-ray visualization
 - Add `Path`: `/plan`
 - Add `Path`: `/local_plan`
 - Add `Map`: `/global_costmap/costmap`

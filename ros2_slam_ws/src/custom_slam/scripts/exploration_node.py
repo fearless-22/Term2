@@ -47,7 +47,12 @@ class ExplorationNode(Node):
         self.declare_parameter("free_threshold", 10)
         self.declare_parameter("occupied_threshold", 65)
         self.declare_parameter("min_frontier_cluster_size", 6)
-        self.declare_parameter("min_goal_distance", 0.6)
+        self.declare_parameter("min_goal_distance", 0.35)
+        self.declare_parameter("bootstrap_min_goal_distance", 0.28)
+        self.declare_parameter("goal_inset_m", 0.30)
+        self.declare_parameter("goal_search_radius_m", 0.70)
+        self.declare_parameter("obstacle_clearance_m", 0.20)
+        self.declare_parameter("max_frontier_samples_per_cluster", 96)
         self.declare_parameter("info_radius_m", 0.8)
         self.declare_parameter("information_weight", 1.0)
         self.declare_parameter("distance_weight", 0.35)
@@ -228,25 +233,139 @@ class ExplorationNode(Node):
 
     def select_goal(self, clusters):
         rx, ry, _ = self.robot_pose
+        robot_mx, robot_my = self.world_to_map(self.map_msg, rx, ry)
+        if robot_mx is None:
+            return None
+
         min_goal_distance = float(self.get_parameter("min_goal_distance").value)
+        bootstrap_min_goal_distance = float(
+            self.get_parameter("bootstrap_min_goal_distance").value
+        )
         alpha = float(self.get_parameter("information_weight").value)
         beta = float(self.get_parameter("distance_weight").value)
 
         best = None
+        bootstrap_best = None
         for cluster in clusters:
-            cx = sum(cell[0] for cell in cluster) / len(cluster)
-            cy = sum(cell[1] for cell in cluster) / len(cluster)
-            wx, wy = self.map_to_world(self.map_msg, cx, cy)
-            cost = math.hypot(wx - rx, wy - ry)
-            if cost < min_goal_distance:
+            for fx, fy in self.sample_frontier_cells(cluster, robot_mx, robot_my):
+                safe_cell = self.find_safe_goal_cell(fx, fy, robot_mx, robot_my)
+                if safe_cell is None:
+                    continue
+
+                wx, wy = self.map_to_world(self.map_msg, safe_cell[0], safe_cell[1])
+                cost = math.hypot(wx - rx, wy - ry)
+                info_gain = self.estimate_information_gain(fx, fy)
+                score = alpha * info_gain - beta * cost
+                candidate = (wx, wy, score, info_gain, cost, len(cluster))
+                if cost < min_goal_distance:
+                    if cost >= bootstrap_min_goal_distance and (
+                        bootstrap_best is None or cost > bootstrap_best[4]
+                    ):
+                        bootstrap_best = candidate
+                    continue
+                if best is None or score > best[2]:
+                    best = candidate
+
+        return best or bootstrap_best
+
+    def sample_frontier_cells(self, cluster, robot_mx, robot_my):
+        max_samples = max(
+            1,
+            int(self.get_parameter("max_frontier_samples_per_cluster").value),
+        )
+        if len(cluster) <= max_samples:
+            return cluster
+
+        by_angle = sorted(
+            cluster,
+            key=lambda cell: math.atan2(cell[1] - robot_my, cell[0] - robot_mx),
+        )
+        step = len(by_angle) / max_samples
+        samples = [by_angle[min(len(by_angle) - 1, int(i * step))] for i in range(max_samples)]
+
+        farthest = sorted(
+            cluster,
+            key=lambda cell: math.hypot(cell[0] - robot_mx, cell[1] - robot_my),
+            reverse=True,
+        )[: min(8, len(cluster))]
+
+        unique_samples = []
+        seen = set()
+        for cell in samples + farthest:
+            if cell in seen:
                 continue
-            info_gain = self.estimate_information_gain(cx, cy)
-            score = alpha * info_gain - beta * cost
-            candidate = (wx, wy, score, info_gain, cost, len(cluster))
-            if best is None or score > best[2]:
-                best = candidate
+            seen.add(cell)
+            unique_samples.append(cell)
+        return unique_samples
+
+    def find_safe_goal_cell(self, frontier_cx, frontier_cy, robot_mx=None, robot_my=None):
+        if robot_mx is None or robot_my is None:
+            rx, ry, _ = self.robot_pose
+            robot_mx, robot_my = self.world_to_map(self.map_msg, rx, ry)
+            if robot_mx is None:
+                return None
+
+        dx = robot_mx - frontier_cx
+        dy = robot_my - frontier_cy
+        length = math.hypot(dx, dy)
+        if length < 1e-6:
+            return None
+
+        resolution = self.map_msg.info.resolution
+        inset_cells = max(1, int(float(self.get_parameter("goal_inset_m").value) / resolution))
+        seed_x = int(round(frontier_cx + dx / length * inset_cells))
+        seed_y = int(round(frontier_cy + dy / length * inset_cells))
+        return self.find_nearest_safe_free_cell(seed_x, seed_y)
+
+    def find_nearest_safe_free_cell(self, seed_x, seed_y):
+        map_msg = self.map_msg
+        resolution = map_msg.info.resolution
+        search_radius = max(1, int(float(self.get_parameter("goal_search_radius_m").value) / resolution))
+        width = map_msg.info.width
+        height = map_msg.info.height
+
+        best = None
+        best_distance = None
+        for y in range(max(0, seed_y - search_radius), min(height, seed_y + search_radius + 1)):
+            for x in range(max(0, seed_x - search_radius), min(width, seed_x + search_radius + 1)):
+                distance = math.hypot(x - seed_x, y - seed_y)
+                if distance > search_radius:
+                    continue
+                if not self.is_safe_free_cell(x, y):
+                    continue
+                if best is None or distance < best_distance:
+                    best = (x, y)
+                    best_distance = distance
 
         return best
+
+    def is_safe_free_cell(self, x, y):
+        map_msg = self.map_msg
+        data = map_msg.data
+        width = map_msg.info.width
+        height = map_msg.info.height
+        free_threshold = int(self.get_parameter("free_threshold").value)
+        occupied_threshold = int(self.get_parameter("occupied_threshold").value)
+        clearance_cells = max(
+            1,
+            int(float(self.get_parameter("obstacle_clearance_m").value) / map_msg.info.resolution),
+        )
+
+        if not (0 <= x < width and 0 <= y < height):
+            return False
+        center_value = data[y * width + x]
+        if center_value < 0 or center_value > free_threshold:
+            return False
+
+        for ny in range(max(0, y - clearance_cells), min(height, y + clearance_cells + 1)):
+            for nx in range(max(0, x - clearance_cells), min(width, x + clearance_cells + 1)):
+                if math.hypot(nx - x, ny - y) > clearance_cells:
+                    continue
+                value = data[ny * width + nx]
+                if value >= occupied_threshold:
+                    return False
+
+        return True
 
     def estimate_information_gain(self, mx, my):
         map_msg = self.map_msg
@@ -276,6 +395,20 @@ class ExplorationNode(Node):
         world_x = origin.position.x + math.cos(yaw) * local_x - math.sin(yaw) * local_y
         world_y = origin.position.y + math.sin(yaw) * local_x + math.cos(yaw) * local_y
         return world_x, world_y
+
+    def world_to_map(self, map_msg, wx, wy):
+        origin = map_msg.info.origin
+        resolution = map_msg.info.resolution
+        yaw = yaw_from_quaternion(origin.orientation)
+        dx = wx - origin.position.x
+        dy = wy - origin.position.y
+        local_x = math.cos(yaw) * dx + math.sin(yaw) * dy
+        local_y = -math.sin(yaw) * dx + math.cos(yaw) * dy
+        mx = int(math.floor(local_x / resolution))
+        my = int(math.floor(local_y / resolution))
+        if 0 <= mx < map_msg.info.width and 0 <= my < map_msg.info.height:
+            return mx, my
+        return None, None
 
     def make_goal_msg(self, x, y):
         rx, ry, _ = self.robot_pose

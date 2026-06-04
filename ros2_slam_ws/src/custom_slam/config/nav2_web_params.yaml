@@ -207,9 +207,9 @@ local_costmap:
         z_voxels: 16
         max_obstacle_height: 2.0
         mark_threshold: 0
-        observation_sources: scan
-        scan:
-          topic: /scan
+        observation_sources: scan_nav
+        scan_nav:
+          topic: /scan_nav
           max_obstacle_height: 2.0
           clearing: True
           marking: True

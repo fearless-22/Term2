@@ -10,7 +10,7 @@ Recommended dual-screen or split-screen layout:
 - Left: browser at `http://localhost:8000`, showing the Embodied-SimLite Web
   simulation, lidar rays, dynamic obstacles and robot motion.
 - Right top: RViz2, showing `/map`, `/scan`, `/plan`, `/local_plan`, costmaps
-  and TF.
+  `/scan_nav`, `/scan_nav_rays` and TF.
 - Right bottom: terminal showing `ros2 launch custom_slam system_launch.py`
   logs and a second terminal ready for `ros2 topic pub`.
 
@@ -67,6 +67,7 @@ Show RViz2:
 
 - `Fixed Frame = map`
 - `/scan` laser points
+- `/scan_nav` laser points or `/scan_nav_rays` red full-ray marker
 - `/map` growing from SLAM
 - TF tree aligned with the robot
 
@@ -97,6 +98,8 @@ Show:
 
 - Browser dynamic obstacles crossing the field.
 - RViz local costmap or local path replanning.
+- `/map` remains clean because SLAM uses static-only `/scan`, while Nav2
+  avoids moving obstacles with `/scan_nav`.
 - Terminal `/map_evaluation` or `/system_state` stream if available.
 
 Say:

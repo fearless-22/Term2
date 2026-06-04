@@ -4,3 +4,5 @@ ros2_slam_ws/install/
 ros2_slam_ws/log/
 # 忽略PPT
 课件PPT/
+#忽略日志
+logs/

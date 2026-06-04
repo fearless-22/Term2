@@ -11,6 +11,7 @@ from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from std_msgs.msg import Bool, String
+from visualization_msgs.msg import Marker
 
 
 class State(str, Enum):
@@ -42,6 +43,14 @@ class StateManager(Node):
         self.declare_parameter("navigate_action_name", "navigate_to_pose")
         self.declare_parameter("global_clear_service", "/global_costmap/clear_entirely_global_costmap")
         self.declare_parameter("local_clear_service", "/local_costmap/clear_entirely_local_costmap")
+        self.declare_parameter("state_marker_frame", "map")
+        self.declare_parameter("state_marker_x", -4.0)
+        self.declare_parameter("state_marker_y", 4.0)
+        self.declare_parameter("state_marker_z", 1.0)
+        self.declare_parameter("state_marker_scale", 0.45)
+        self.declare_parameter("nav_goal_marker_topic", "/nav_goal_marker")
+        self.declare_parameter("nav_goal_marker_scale", 0.45)
+        self.declare_parameter("nav_goal_marker_text_scale", 0.45)
 
         self.state = State.IDLE
         self.state_enter_time = self.now_sec()
@@ -64,6 +73,12 @@ class StateManager(Node):
             Bool, "/exploration/enable", 10
         )
         self.system_state_pub = self.create_publisher(String, "/system_state", 10)
+        self.system_state_marker_pub = self.create_publisher(
+            Marker, "/system_state_marker", 10
+        )
+        self.nav_goal_marker_pub = self.create_publisher(
+            Marker, self.get_parameter("nav_goal_marker_topic").value, 10
+        )
         self.nav_goal_pub = self.create_publisher(PoseStamped, "/goal_pose", 10)
         self.cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
 
@@ -131,12 +146,18 @@ class StateManager(Node):
         if command == "START":
             self.recovery_attempts = 0
             self.last_error_reason = ""
+            self.pending_goal = None
+            self.active_goal = None
+            self.clear_nav_goal_marker()
             self.transition(State.EXPLORATION, "operator command START")
         elif command == "STOP":
             self.pending_goal = None
             self.navigation_result = None
             if self.goal_handle is not None:
                 self.goal_handle.cancel_goal_async()
+            self.goal_handle = None
+            self.active_goal = None
+            self.clear_nav_goal_marker()
             self.publish_zero_velocity()
             self.transition(State.IDLE, "operator command STOP")
         elif command == "INJECT_ERROR":
@@ -145,6 +166,9 @@ class StateManager(Node):
         elif command == "FINISH":
             self.pending_goal = None
             self.navigation_result = None
+            self.goal_handle = None
+            self.active_goal = None
+            self.clear_nav_goal_marker()
             self.publish_zero_velocity()
             self.transition(State.FINISH, "operator command FINISH")
         else:
@@ -219,6 +243,7 @@ class StateManager(Node):
         goal.pose = pose
         self.nav_goal_pub.publish(pose)
         self.active_goal = pose
+        self.publish_nav_goal_marker(pose)
         self.navigation_result = None
         self.navigation_start_time = self.now_sec()
 
@@ -255,10 +280,12 @@ class StateManager(Node):
             self.recovery_attempts = 0
             self.goal_handle = None
             self.active_goal = None
+            self.clear_nav_goal_marker()
             self.transition(State.EXPLORATION, "goal reached")
         elif self.navigation_result == "FAILED":
             self.goal_handle = None
             self.active_goal = None
+            self.clear_nav_goal_marker()
             self.transition(State.ERROR, self.last_error_reason)
 
     def check_navigation_timeout(self):
@@ -359,12 +386,133 @@ class StateManager(Node):
         msg = String()
         msg.data = json.dumps(payload, sort_keys=True)
         self.system_state_pub.publish(msg)
+        self.publish_system_state_marker(payload)
+        if self.active_goal is not None:
+            self.publish_nav_goal_marker(self.active_goal)
 
         now = self.now_sec()
         period = float(self.get_parameter("status_log_period_sec").value)
         if force_log or now - self.last_status_log_time >= period:
             self.last_status_log_time = now
             self.get_logger().info(f"[FSM Heartbeat] {msg.data}")
+
+    def publish_system_state_marker(self, payload):
+        marker = Marker()
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.header.frame_id = self.get_parameter("state_marker_frame").value
+        marker.ns = "fsm_state"
+        marker.id = 0
+        marker.type = Marker.TEXT_VIEW_FACING
+        marker.action = Marker.ADD
+        marker.pose.position.x = float(self.get_parameter("state_marker_x").value)
+        marker.pose.position.y = float(self.get_parameter("state_marker_y").value)
+        marker.pose.position.z = float(self.get_parameter("state_marker_z").value)
+        marker.pose.orientation.w = 1.0
+        marker.scale.z = float(self.get_parameter("state_marker_scale").value)
+        marker.color.a = 1.0
+        marker.lifetime.sec = 0
+        marker.lifetime.nanosec = 500000000
+
+        self.apply_marker_color(marker)
+        marker.text = self.format_state_marker_text(payload)
+        self.system_state_marker_pub.publish(marker)
+
+    def publish_nav_goal_marker(self, pose):
+        now = self.get_clock().now().to_msg()
+        scale = float(self.get_parameter("nav_goal_marker_scale").value)
+        text_scale = float(self.get_parameter("nav_goal_marker_text_scale").value)
+
+        point = Marker()
+        point.header.stamp = now
+        point.header.frame_id = pose.header.frame_id or "map"
+        point.ns = "nav_goal"
+        point.id = 0
+        point.type = Marker.CYLINDER
+        point.action = Marker.ADD
+        point.pose.position.x = pose.pose.position.x
+        point.pose.position.y = pose.pose.position.y
+        point.pose.position.z = 0.05
+        point.pose.orientation.w = 1.0
+        point.scale.x = scale
+        point.scale.y = scale
+        point.scale.z = 0.10
+        point.color.r = 1.0
+        point.color.g = 0.15
+        point.color.b = 0.85
+        point.color.a = 0.95
+        point.lifetime.sec = 0
+        point.lifetime.nanosec = 600000000
+        self.nav_goal_marker_pub.publish(point)
+
+        text = Marker()
+        text.header.stamp = now
+        text.header.frame_id = point.header.frame_id
+        text.ns = "nav_goal"
+        text.id = 1
+        text.type = Marker.TEXT_VIEW_FACING
+        text.action = Marker.ADD
+        text.pose.position.x = pose.pose.position.x
+        text.pose.position.y = pose.pose.position.y
+        text.pose.position.z = 0.75
+        text.pose.orientation.w = 1.0
+        text.scale.z = text_scale
+        text.color.r = 1.0
+        text.color.g = 0.15
+        text.color.b = 0.85
+        text.color.a = 1.0
+        text.lifetime.sec = 0
+        text.lifetime.nanosec = 600000000
+        text.text = f"GOAL\n({pose.pose.position.x:.2f}, {pose.pose.position.y:.2f})"
+        self.nav_goal_marker_pub.publish(text)
+
+    def clear_nav_goal_marker(self):
+        now = self.get_clock().now().to_msg()
+        for marker_id in (0, 1):
+            marker = Marker()
+            marker.header.stamp = now
+            marker.header.frame_id = "map"
+            marker.ns = "nav_goal"
+            marker.id = marker_id
+            marker.action = Marker.DELETE
+            self.nav_goal_marker_pub.publish(marker)
+
+    def apply_marker_color(self, marker):
+        colors = {
+            State.IDLE: (0.75, 0.75, 0.75),
+            State.EXPLORATION: (0.0, 0.85, 1.0),
+            State.NAVIGATION: (0.1, 1.0, 0.25),
+            State.MAP_EVALUATION: (0.25, 0.55, 1.0),
+            State.ERROR: (1.0, 0.05, 0.05),
+            State.RECOVERY: (1.0, 0.75, 0.0),
+            State.FINISH: (0.2, 0.45, 1.0),
+            State.EMERGENCY_STOP: (1.0, 0.0, 0.0),
+        }
+        marker.color.r, marker.color.g, marker.color.b = colors.get(
+            self.state, (1.0, 1.0, 1.0)
+        )
+
+    def format_state_marker_text(self, payload):
+        lines = [
+            f"FSM: {payload['state']}",
+            f"Recovery: {payload['recovery_attempts']}",
+        ]
+        if payload.get("active_goal"):
+            goal = payload["active_goal"]
+            lines.append(f"Goal: ({goal['x']:.2f}, {goal['y']:.2f})")
+
+        map_eval = payload.get("map_evaluation")
+        if isinstance(map_eval, dict):
+            known_ratio = map_eval.get("known_ratio")
+            frontier_clusters = map_eval.get("frontier_clusters")
+            if known_ratio is not None:
+                lines.append(f"Known: {known_ratio:.2f}")
+            if frontier_clusters is not None:
+                lines.append(f"Frontiers: {frontier_clusters}")
+
+        if payload.get("last_error_reason"):
+            lines.append(f"Error: {payload['last_error_reason'][:42]}")
+
+        return "\n".join(lines)
 
 
 def main(args=None):

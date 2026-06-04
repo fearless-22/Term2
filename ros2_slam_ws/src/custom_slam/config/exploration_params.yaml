@@ -12,7 +12,12 @@ exploration_node:
     free_threshold: 10
     occupied_threshold: 65
     min_frontier_cluster_size: 6
-    min_goal_distance: 0.6
+    min_goal_distance: 0.35
+    bootstrap_min_goal_distance: 0.28
+    goal_inset_m: 0.30
+    goal_search_radius_m: 0.70
+    obstacle_clearance_m: 0.20
+    max_frontier_samples_per_cluster: 96
     info_radius_m: 0.8
     information_weight: 1.0
     distance_weight: 0.35

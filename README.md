@@ -173,7 +173,45 @@ ros2_slam_ws/src/custom_slam/docs/project_gap_analysis.md
 ros2_slam_ws/src/custom_slam/docs/demo_video_3min_script.md
 ```
 
-## 运行顺序
+## 一键启动
+
+推荐直接使用根目录脚本同时启动 Web 仿真、ROS2 桥接器、综合系统和 RViz2：
+
+```bash
+./run_web_system.sh
+```
+
+脚本会自动：
+
+- 启动 `embodied-sim-lite/ProductV1.0.py`，浏览器访问 `http://localhost:8000`。
+- 启动 `embodied-sim-lite/sim_ros2_bridgeV1.0.py`。
+- 启动 `ros2 launch custom_slam system_launch.py`。
+- 启动 `rviz2`。
+- 将日志写入 `logs/web_system_时间戳/`。
+
+如果改过 ROS2 包，需要重新构建后启动：
+
+```bash
+./run_web_system.sh --rebuild
+```
+
+`--rebuild` 会先停止旧的 Web 仿真、ROS2 桥接器和综合系统进程，避免端口 8000 上仍然运行旧版 `ProductV1.0.py`。
+
+如果只想不重建、但强制重启旧进程：
+
+```bash
+./run_web_system.sh --fresh
+```
+
+如果只想开 Web + ROS2 系统，不自动打开 RViz2：
+
+```bash
+./run_web_system.sh --no-rviz
+```
+
+按 `Ctrl+C` 会停止脚本本次启动的后台进程。
+
+## 手动运行顺序
 
 终端 1：启动 Web 仿真。
 
@@ -211,3 +249,20 @@ ros2 launch custom_slam system_launch.py
 ```bash
 ros2 topic pub --once /system_command std_msgs/msg/String "{data: INJECT_ERROR}"
 ```
+
+## 动态障碍与建图雷达分流
+
+为了避免移动障碍物在 SLAM 地图中留下黑色“假墙”，Web 路线现在发布两套雷达：
+
+- `/scan`：只包含静态墙体，供 `slam_toolbox` 建图使用。
+- `/scan_nav`：包含静态墙体和移动障碍，供 Nav2 `local_costmap` 动态避障使用。
+
+RViz2 推荐显示：
+
+- `Map: /map`，检查静态地图是否干净。
+- `LaserScan: /scan_nav`，查看移动障碍是否被实时扫到。
+- `Marker: /scan_nav_rays`，显示红色整条雷达射线。
+- `Marker: /nav_goal_marker`，显示当前自主探索导航目的点。
+- `Map: /local_costmap/costmap`，查看移动障碍形成的临时代价。
+
+因此移动障碍不会被写进 `/map`，但小车仍会通过局部代价地图识别并绕开它。
