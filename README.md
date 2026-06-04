@@ -133,3 +133,81 @@ ros2 launch custom_slam slam_launch.py
 参考手册配置rviz2窗口  
 打开遥控终端控制小车移动(见上文)  
 注意速度要很低，保证建图效果  
+
+***
+
+# 终版项目路线：Embodied-SimLite + ROS2 + SLAM + Nav2
+
+参照 `课件PPT/课件_11综合项目设计与实现.pdf` 和
+`课件PPT/课件_12项目测试与展示.pdf`，终版路线以 Web 端
+Embodied-SimLite 仿真为物理环境，ROS2 侧完成 SLAM、前沿探索、Nav2
+导航、地图评估和状态机恢复。
+
+## 已补齐的 ROS2 工作区能力
+
+核心代码位于：
+
+```bash
+ros2_slam_ws/src/custom_slam
+```
+
+新增内容：
+
+- `launch/system_launch.py`：一键启动 Web 路线的 SLAM + Nav2 + 综合项目节点。
+- `launch/slam_web_launch.py`：启动 Web 路线 SLAM Toolbox。
+- `launch/nav2_web_launch.py`：启动 Nav2、前沿探索、地图评估、状态机。
+- `scripts/exploration_node.py`：前沿检测、聚类过滤、目标评分。
+- `scripts/map_evaluator.py`：地图覆盖率、前沿数量、验收状态评估。
+- `scripts/state_manager.py`：IDLE / EXPLORATION / NAVIGATION / MAP_EVALUATION / ERROR / RECOVERY / FINISH 状态机。
+- `config/*_web_params.yaml`：Web 路线专用参数，避免 `/clock` 缺失导致的时间同步问题。
+
+详细对照分析见：
+
+```bash
+ros2_slam_ws/src/custom_slam/docs/project_gap_analysis.md
+```
+
+3 分钟连续演示视频脚本见：
+
+```bash
+ros2_slam_ws/src/custom_slam/docs/demo_video_3min_script.md
+```
+
+## 运行顺序
+
+终端 1：启动 Web 仿真。
+
+```bash
+cd embodied-sim-lite
+python3 ProductV1.0.py
+```
+
+浏览器打开：
+
+```text
+http://localhost:8000
+```
+
+终端 2：启动 ROS2 桥接器。
+
+```bash
+cd embodied-sim-lite
+source /opt/ros/humble/setup.bash
+python3 sim_ros2_bridgeV1.0.py
+```
+
+终端 3：启动终版综合系统。
+
+```bash
+cd ros2_slam_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select custom_slam
+source install/setup.bash
+ros2 launch custom_slam system_launch.py
+```
+
+演示恢复状态机：
+
+```bash
+ros2 topic pub --once /system_command std_msgs/msg/String "{data: INJECT_ERROR}"
+```

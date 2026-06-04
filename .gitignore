@@ -2,3 +2,5 @@
 ros2_slam_ws/build/
 ros2_slam_ws/install/
 ros2_slam_ws/log/
+# 忽略PPT
+课件PPT/

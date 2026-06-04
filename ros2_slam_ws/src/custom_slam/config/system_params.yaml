@@ -1,0 +1,26 @@
+state_manager:
+  ros__parameters:
+    auto_start: true
+    start_delay_sec: 2.0
+    heartbeat_hz: 10.0
+    goal_timeout_sec: 90.0
+    candidate_timeout_sec: 25.0
+    recovery_cooldown_sec: 3.0
+    max_recovery_attempts: 3
+    goal_reached_tolerance: 0.35
+    status_log_period_sec: 2.0
+    navigate_action_name: navigate_to_pose
+    global_clear_service: /global_costmap/clear_entirely_global_costmap
+    local_clear_service: /local_costmap/clear_entirely_local_costmap
+
+map_evaluator:
+  ros__parameters:
+    map_topic: /map
+    evaluation_topic: /map_evaluation
+    timer_period_sec: 1.0
+    free_threshold: 10
+    min_frontier_cluster_size: 6
+    pass_known_ratio: 0.72
+    pass_frontier_clusters: 0
+    pass_known_area_m2: 0.0
+    log_period_sec: 5.0

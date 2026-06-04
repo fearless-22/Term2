@@ -1,0 +1,19 @@
+exploration_node:
+  ros__parameters:
+    enabled_on_start: false
+    map_topic: /map
+    odom_topic: /odom
+    goal_topic: /exploration/goal_pose
+    status_topic: /exploration/status
+    direct_nav_goal_topic: /goal_pose
+    publish_direct_nav_goal: false
+    timer_period_sec: 1.0
+    goal_interval_sec: 4.0
+    free_threshold: 10
+    occupied_threshold: 65
+    min_frontier_cluster_size: 6
+    min_goal_distance: 0.6
+    info_radius_m: 0.8
+    information_weight: 1.0
+    distance_weight: 0.35
+    status_log_period_sec: 3.0

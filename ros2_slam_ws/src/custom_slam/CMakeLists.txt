@@ -10,9 +10,18 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(slam_toolbox REQUIRED)
 
+install(PROGRAMS
+  scripts/exploration_node.py
+  scripts/map_evaluator.py
+  scripts/state_manager.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 install(DIRECTORY
   launch
   config
+  maps
+  docs
   DESTINATION share/${PROJECT_NAME}
 )
 
