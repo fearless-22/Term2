@@ -40,10 +40,11 @@ class ExplorationNode(Node):
         self.declare_parameter("odom_topic", "/odom")
         self.declare_parameter("goal_topic", "/exploration/goal_pose")
         self.declare_parameter("status_topic", "/exploration/status")
+        self.declare_parameter("failed_goal_topic", "/exploration/failed_goal")
         self.declare_parameter("direct_nav_goal_topic", "/goal_pose")
         self.declare_parameter("publish_direct_nav_goal", False)
-        self.declare_parameter("timer_period_sec", 1.0)
-        self.declare_parameter("goal_interval_sec", 4.0)
+        self.declare_parameter("timer_period_sec", 0.5)
+        self.declare_parameter("goal_interval_sec", 1.0)
         self.declare_parameter("free_threshold", 10)
         self.declare_parameter("occupied_threshold", 65)
         self.declare_parameter("min_frontier_cluster_size", 6)
@@ -52,7 +53,11 @@ class ExplorationNode(Node):
         self.declare_parameter("goal_inset_m", 0.30)
         self.declare_parameter("goal_search_radius_m", 0.70)
         self.declare_parameter("obstacle_clearance_m", 0.20)
-        self.declare_parameter("max_frontier_samples_per_cluster", 96)
+        self.declare_parameter("max_frontier_samples_per_cluster", 32)
+        self.declare_parameter("max_frontier_clusters_to_score", 80)
+        self.declare_parameter("failed_goal_blacklist_radius_m", 1.20)
+        self.declare_parameter("failed_goal_blacklist_ttl_sec", 120.0)
+        self.declare_parameter("failed_goal_blacklist_max_entries", 30)
         self.declare_parameter("info_radius_m", 0.8)
         self.declare_parameter("information_weight", 1.0)
         self.declare_parameter("distance_weight", 0.35)
@@ -64,11 +69,13 @@ class ExplorationNode(Node):
         self.last_goal_time = self.get_clock().now()
         self.last_status_log_time = self.get_clock().now()
         self.last_goal = None
+        self.failed_goal_blacklist = []
 
         map_topic = self.get_parameter("map_topic").value
         odom_topic = self.get_parameter("odom_topic").value
         goal_topic = self.get_parameter("goal_topic").value
         status_topic = self.get_parameter("status_topic").value
+        failed_goal_topic = self.get_parameter("failed_goal_topic").value
         direct_goal_topic = self.get_parameter("direct_nav_goal_topic").value
         timer_period = float(self.get_parameter("timer_period_sec").value)
 
@@ -81,6 +88,9 @@ class ExplorationNode(Node):
         self.enable_sub = self.create_subscription(
             Bool, "/exploration/enable", self.enable_callback, 10
         )
+        self.failed_goal_sub = self.create_subscription(
+            PoseStamped, failed_goal_topic, self.failed_goal_callback, 10
+        )
 
         self.goal_pub = self.create_publisher(PoseStamped, goal_topic, 10)
         self.direct_goal_pub = self.create_publisher(PoseStamped, direct_goal_topic, 10)
@@ -88,6 +98,9 @@ class ExplorationNode(Node):
 
         self.timer = self.create_timer(timer_period, self.timer_callback)
         self.get_logger().info("Frontier exploration node ready")
+
+    def now_sec(self):
+        return self.get_clock().now().nanoseconds * 1e-9
 
     def map_callback(self, msg):
         self.map_msg = msg
@@ -102,7 +115,30 @@ class ExplorationNode(Node):
     def enable_callback(self, msg):
         self.enabled = bool(msg.data)
 
+    def failed_goal_callback(self, msg):
+        x = msg.pose.position.x
+        y = msg.pose.position.y
+        now = self.now_sec()
+        radius = float(self.get_parameter("failed_goal_blacklist_radius_m").value)
+        updated = False
+
+        for index, (goal_x, goal_y, _) in enumerate(self.failed_goal_blacklist):
+            if math.hypot(x - goal_x, y - goal_y) <= radius * 0.5:
+                self.failed_goal_blacklist[index] = (x, y, now)
+                updated = True
+                break
+
+        if not updated:
+            self.failed_goal_blacklist.append((x, y, now))
+
+        self.prune_failed_goal_blacklist()
+        self.get_logger().warn(
+            f"[Exploration] blacklisted failed goal near ({x:.2f}, {y:.2f})"
+        )
+
     def timer_callback(self):
+        self.prune_failed_goal_blacklist()
+
         if not self.enabled:
             self.publish_status({"event": "IDLE", "enabled": False}, log=False)
             return
@@ -130,6 +166,7 @@ class ExplorationNode(Node):
                     "enabled": True,
                     "frontier_cells": len(frontiers),
                     "frontier_clusters": 0,
+                    "blacklisted_goals": len(self.failed_goal_blacklist),
                 }
             )
             return
@@ -143,12 +180,13 @@ class ExplorationNode(Node):
                     "enabled": True,
                     "frontier_cells": len(frontiers),
                     "frontier_clusters": len(clusters),
+                    "blacklisted_goals": len(self.failed_goal_blacklist),
                 },
                 log=False,
             )
             return
 
-        candidate = self.select_goal(clusters)
+        candidate, scored_clusters = self.select_goal(clusters)
         if candidate is None:
             self.publish_status(
                 {
@@ -156,6 +194,8 @@ class ExplorationNode(Node):
                     "enabled": True,
                     "frontier_cells": len(frontiers),
                     "frontier_clusters": len(clusters),
+                    "scored_frontier_clusters": scored_clusters,
+                    "blacklisted_goals": len(self.failed_goal_blacklist),
                 }
             )
             return
@@ -179,6 +219,8 @@ class ExplorationNode(Node):
                 "cluster_size": cluster_size,
                 "frontier_cells": len(frontiers),
                 "frontier_clusters": len(clusters),
+                "scored_frontier_clusters": scored_clusters,
+                "blacklisted_goals": len(self.failed_goal_blacklist),
             },
             force_log=True,
         )
@@ -235,7 +277,9 @@ class ExplorationNode(Node):
         rx, ry, _ = self.robot_pose
         robot_mx, robot_my = self.world_to_map(self.map_msg, rx, ry)
         if robot_mx is None:
-            return None
+            return None, 0
+
+        clusters = self.prioritize_frontier_clusters(clusters, robot_mx, robot_my)
 
         min_goal_distance = float(self.get_parameter("min_goal_distance").value)
         bootstrap_min_goal_distance = float(
@@ -253,6 +297,9 @@ class ExplorationNode(Node):
                     continue
 
                 wx, wy = self.map_to_world(self.map_msg, safe_cell[0], safe_cell[1])
+                if self.is_goal_blacklisted(wx, wy):
+                    continue
+
                 cost = math.hypot(wx - rx, wy - ry)
                 info_gain = self.estimate_information_gain(fx, fy)
                 score = alpha * info_gain - beta * cost
@@ -266,7 +313,55 @@ class ExplorationNode(Node):
                 if best is None or score > best[2]:
                     best = candidate
 
-        return best or bootstrap_best
+        return best or bootstrap_best, len(clusters)
+
+    def prioritize_frontier_clusters(self, clusters, robot_mx, robot_my):
+        max_clusters = int(self.get_parameter("max_frontier_clusters_to_score").value)
+        if max_clusters <= 0 or len(clusters) <= max_clusters:
+            return clusters
+
+        return sorted(
+            clusters,
+            key=lambda cluster: self.frontier_cluster_distance(
+                cluster, robot_mx, robot_my
+            ),
+        )[:max_clusters]
+
+    def frontier_cluster_distance(self, cluster, robot_mx, robot_my):
+        if not cluster:
+            return float("inf")
+        sum_x = 0
+        sum_y = 0
+        for x, y in cluster:
+            sum_x += x
+            sum_y += y
+        cx = sum_x / len(cluster)
+        cy = sum_y / len(cluster)
+        return math.hypot(cx - robot_mx, cy - robot_my)
+
+    def prune_failed_goal_blacklist(self):
+        ttl = float(self.get_parameter("failed_goal_blacklist_ttl_sec").value)
+        if ttl <= 0.0:
+            self.failed_goal_blacklist = []
+            return
+
+        now = self.now_sec()
+        self.failed_goal_blacklist = [
+            entry for entry in self.failed_goal_blacklist if now - entry[2] <= ttl
+        ]
+
+        max_entries = int(self.get_parameter("failed_goal_blacklist_max_entries").value)
+        if max_entries > 0 and len(self.failed_goal_blacklist) > max_entries:
+            self.failed_goal_blacklist = self.failed_goal_blacklist[-max_entries:]
+
+    def is_goal_blacklisted(self, x, y):
+        radius = float(self.get_parameter("failed_goal_blacklist_radius_m").value)
+        if radius <= 0.0:
+            return False
+        return any(
+            math.hypot(x - goal_x, y - goal_y) <= radius
+            for goal_x, goal_y, _ in self.failed_goal_blacklist
+        )
 
     def sample_frontier_cells(self, cluster, robot_mx, robot_my):
         max_samples = max(
@@ -298,7 +393,13 @@ class ExplorationNode(Node):
             unique_samples.append(cell)
         return unique_samples
 
-    def find_safe_goal_cell(self, frontier_cx, frontier_cy, robot_mx=None, robot_my=None):
+    def find_safe_goal_cell(
+        self,
+        frontier_cx,
+        frontier_cy,
+        robot_mx=None,
+        robot_my=None,
+    ):
         if robot_mx is None or robot_my is None:
             rx, ry, _ = self.robot_pose
             robot_mx, robot_my = self.world_to_map(self.map_msg, rx, ry)

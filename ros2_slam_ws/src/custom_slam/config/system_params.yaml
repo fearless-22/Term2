@@ -4,31 +4,32 @@ state_manager:
     start_delay_sec: 5.0
     heartbeat_hz: 10.0
     goal_timeout_sec: 90.0
-    candidate_timeout_sec: 25.0
+    candidate_timeout_sec: 15.0
     recovery_cooldown_sec: 3.0
-    max_recovery_attempts: 8
+    max_recovery_attempts: 5
     goal_reached_tolerance: 0.35
     status_log_period_sec: 2.0
     navigate_action_name: navigate_to_pose
     global_clear_service: /global_costmap/clear_entirely_global_costmap
     local_clear_service: /local_costmap/clear_entirely_local_costmap
+    failed_goal_topic: /exploration/failed_goal
     state_marker_frame: map
-    state_marker_x: -25.0
-    state_marker_y: 15.0
+    state_marker_x: -30.0
+    state_marker_y: 17.0
     state_marker_z: 1.0
     state_marker_scale: 0.8
     nav_goal_marker_topic: /nav_goal_marker
-    nav_goal_marker_scale: 0.8
+    nav_goal_marker_scale: 0.4
     nav_goal_marker_text_scale: 0.8
 
 map_evaluator:
   ros__parameters:
     map_topic: /map
     evaluation_topic: /map_evaluation
-    timer_period_sec: 1.0
+    timer_period_sec: 0.5
     free_threshold: 10
     min_frontier_cluster_size: 6
-    pass_known_ratio: 0.92
-    pass_frontier_clusters: 0
+    pass_known_ratio: 0.80
+    pass_frontier_clusters: 200
     pass_known_area_m2: 0.0
     log_period_sec: 5.0

@@ -5,10 +5,11 @@ exploration_node:
     odom_topic: /odom
     goal_topic: /exploration/goal_pose
     status_topic: /exploration/status
+    failed_goal_topic: /exploration/failed_goal
     direct_nav_goal_topic: /goal_pose
     publish_direct_nav_goal: false
-    timer_period_sec: 1.0
-    goal_interval_sec: 4.0
+    timer_period_sec: 0.5
+    goal_interval_sec: 1.0
     free_threshold: 10
     occupied_threshold: 65
     min_frontier_cluster_size: 6
@@ -17,7 +18,11 @@ exploration_node:
     goal_inset_m: 0.30
     goal_search_radius_m: 0.70
     obstacle_clearance_m: 0.20
-    max_frontier_samples_per_cluster: 96
+    max_frontier_samples_per_cluster: 32
+    max_frontier_clusters_to_score: 80
+    failed_goal_blacklist_radius_m: 1.20
+    failed_goal_blacklist_ttl_sec: 120.0
+    failed_goal_blacklist_max_entries: 30
     info_radius_m: 0.8
     information_weight: 1.0
     distance_weight: 0.35

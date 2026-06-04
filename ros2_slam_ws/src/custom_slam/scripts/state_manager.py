@@ -43,6 +43,7 @@ class StateManager(Node):
         self.declare_parameter("navigate_action_name", "navigate_to_pose")
         self.declare_parameter("global_clear_service", "/global_costmap/clear_entirely_global_costmap")
         self.declare_parameter("local_clear_service", "/local_costmap/clear_entirely_local_costmap")
+        self.declare_parameter("failed_goal_topic", "/exploration/failed_goal")
         self.declare_parameter("state_marker_frame", "map")
         self.declare_parameter("state_marker_x", -4.0)
         self.declare_parameter("state_marker_y", 4.0)
@@ -58,6 +59,7 @@ class StateManager(Node):
         self.pending_goal = None
         self.active_goal = None
         self.goal_handle = None
+        self.navigation_goal_id = 0
         self.navigation_start_time = None
         self.navigation_result = None
         self.recovery_attempts = 0
@@ -78,6 +80,9 @@ class StateManager(Node):
         )
         self.nav_goal_marker_pub = self.create_publisher(
             Marker, self.get_parameter("nav_goal_marker_topic").value, 10
+        )
+        self.failed_goal_pub = self.create_publisher(
+            PoseStamped, self.get_parameter("failed_goal_topic").value, 10
         )
         self.nav_goal_pub = self.create_publisher(PoseStamped, "/goal_pose", 10)
         self.cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
@@ -244,15 +249,31 @@ class StateManager(Node):
         self.nav_goal_pub.publish(pose)
         self.active_goal = pose
         self.publish_nav_goal_marker(pose)
+        self.last_error_reason = ""
         self.navigation_result = None
         self.navigation_start_time = self.now_sec()
+        self.navigation_goal_id += 1
+        goal_id = self.navigation_goal_id
 
         future = self.nav_client.send_goal_async(goal, feedback_callback=self.feedback_callback)
-        future.add_done_callback(self.goal_response_callback)
+        future.add_done_callback(
+            lambda response_future, sent_goal_id=goal_id: self.goal_response_callback(
+                response_future, sent_goal_id
+            )
+        )
         self.transition(State.NAVIGATION, "frontier goal accepted for dispatch")
 
-    def goal_response_callback(self, future):
-        goal_handle = future.result()
+    def goal_response_callback(self, future, goal_id):
+        if goal_id != self.navigation_goal_id or self.state != State.NAVIGATION:
+            return
+
+        try:
+            goal_handle = future.result()
+        except Exception as exc:
+            self.last_error_reason = f"NavigateToPose goal response error: {exc}"
+            self.navigation_result = "FAILED"
+            return
+
         if not goal_handle.accepted:
             self.last_error_reason = "NavigateToPose goal rejected"
             self.navigation_result = "FAILED"
@@ -260,15 +281,44 @@ class StateManager(Node):
 
         self.goal_handle = goal_handle
         result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self.navigation_result_callback)
+        result_future.add_done_callback(
+            lambda nav_future, sent_goal_id=goal_id, sent_goal_handle=goal_handle:
+                self.navigation_result_callback(nav_future, sent_goal_id, sent_goal_handle)
+        )
 
-    def navigation_result_callback(self, future):
-        result = future.result()
+    def navigation_result_callback(self, future, goal_id, goal_handle):
+        if (
+            goal_id != self.navigation_goal_id
+            or goal_handle is not self.goal_handle
+            or self.state != State.NAVIGATION
+        ):
+            return
+
+        try:
+            result = future.result()
+        except Exception as exc:
+            self.last_error_reason = f"NavigateToPose result error: {exc}"
+            self.navigation_result = "FAILED"
+            return
+
         if result.status == GoalStatus.STATUS_SUCCEEDED:
             self.navigation_result = "SUCCEEDED"
         else:
-            self.last_error_reason = f"NavigateToPose failed with status {result.status}"
+            self.last_error_reason = self.format_navigation_status(result.status)
             self.navigation_result = "FAILED"
+
+    def format_navigation_status(self, status):
+        labels = {
+            GoalStatus.STATUS_UNKNOWN: "UNKNOWN",
+            GoalStatus.STATUS_ACCEPTED: "ACCEPTED",
+            GoalStatus.STATUS_EXECUTING: "EXECUTING",
+            GoalStatus.STATUS_CANCELING: "CANCELING",
+            GoalStatus.STATUS_SUCCEEDED: "SUCCEEDED",
+            GoalStatus.STATUS_CANCELED: "CANCELED",
+            GoalStatus.STATUS_ABORTED: "ABORTED",
+        }
+        label = labels.get(status, f"STATUS_{status}")
+        return f"NavigateToPose ended with {label} ({status})"
 
     def feedback_callback(self, feedback_msg):
         feedback = feedback_msg.feedback
@@ -283,6 +333,7 @@ class StateManager(Node):
             self.clear_nav_goal_marker()
             self.transition(State.EXPLORATION, "goal reached")
         elif self.navigation_result == "FAILED":
+            self.publish_failed_goal()
             self.goal_handle = None
             self.active_goal = None
             self.clear_nav_goal_marker()
@@ -299,6 +350,15 @@ class StateManager(Node):
         if self.goal_handle is not None:
             self.goal_handle.cancel_goal_async()
         self.navigation_result = "FAILED"
+
+    def publish_failed_goal(self):
+        if self.active_goal is None:
+            return
+        failed_goal = PoseStamped()
+        failed_goal.header = self.active_goal.header
+        failed_goal.header.stamp = self.get_clock().now().to_msg()
+        failed_goal.pose = self.active_goal.pose
+        self.failed_goal_pub.publish(failed_goal)
 
     def execute_recovery(self):
         if not self.recovery_started:
@@ -510,7 +570,7 @@ class StateManager(Node):
                 lines.append(f"Frontiers: {frontier_clusters}")
 
         if payload.get("last_error_reason"):
-            lines.append(f"Error: {payload['last_error_reason'][:42]}")
+            lines.append(f"LastError: {payload['last_error_reason'][:42]}")
 
         return "\n".join(lines)
 
