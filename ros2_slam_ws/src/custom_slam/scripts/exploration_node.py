@@ -50,6 +50,11 @@ class ExplorationNode(Node):
         self.declare_parameter("min_frontier_cluster_size", 6)
         self.declare_parameter("min_goal_distance", 0.35)
         self.declare_parameter("bootstrap_min_goal_distance", 0.28)
+        self.declare_parameter("preferred_goal_distance_m", 4.0)
+        self.declare_parameter("max_goal_distance_m", 7.0)
+        self.declare_parameter("allow_far_goal_fallback", True)
+        self.declare_parameter("fallback_max_goal_distance_m", 14.0)
+        self.declare_parameter("far_goal_penalty_weight", 20.0)
         self.declare_parameter("goal_inset_m", 0.30)
         self.declare_parameter("goal_search_radius_m", 0.70)
         self.declare_parameter("obstacle_clearance_m", 0.20)
@@ -58,6 +63,13 @@ class ExplorationNode(Node):
         self.declare_parameter("failed_goal_blacklist_radius_m", 1.20)
         self.declare_parameter("failed_goal_blacklist_ttl_sec", 120.0)
         self.declare_parameter("failed_goal_blacklist_max_entries", 30)
+        self.declare_parameter("costmap_avoidance_enabled", True)
+        self.declare_parameter("costmap_topic", "/global_costmap/costmap")
+        self.declare_parameter("costmap_clearance_m", 0.35)
+        self.declare_parameter("costmap_reject_threshold", 50)
+        self.declare_parameter("costmap_penalty_weight", 4.0)
+        self.declare_parameter("allow_costmap_fallback", True)
+        self.declare_parameter("blocked_costmap_penalty_weight", 25.0)
         self.declare_parameter("info_radius_m", 0.8)
         self.declare_parameter("information_weight", 1.0)
         self.declare_parameter("distance_weight", 0.35)
@@ -65,6 +77,7 @@ class ExplorationNode(Node):
 
         self.enabled = bool(self.get_parameter("enabled_on_start").value)
         self.map_msg = None
+        self.costmap_msg = None
         self.robot_pose = None
         self.last_goal_time = self.get_clock().now()
         self.last_status_log_time = self.get_clock().now()
@@ -76,6 +89,7 @@ class ExplorationNode(Node):
         goal_topic = self.get_parameter("goal_topic").value
         status_topic = self.get_parameter("status_topic").value
         failed_goal_topic = self.get_parameter("failed_goal_topic").value
+        costmap_topic = self.get_parameter("costmap_topic").value
         direct_goal_topic = self.get_parameter("direct_nav_goal_topic").value
         timer_period = float(self.get_parameter("timer_period_sec").value)
 
@@ -91,6 +105,9 @@ class ExplorationNode(Node):
         self.failed_goal_sub = self.create_subscription(
             PoseStamped, failed_goal_topic, self.failed_goal_callback, 10
         )
+        self.costmap_sub = self.create_subscription(
+            OccupancyGrid, costmap_topic, self.costmap_callback, 10
+        )
 
         self.goal_pub = self.create_publisher(PoseStamped, goal_topic, 10)
         self.direct_goal_pub = self.create_publisher(PoseStamped, direct_goal_topic, 10)
@@ -104,6 +121,9 @@ class ExplorationNode(Node):
 
     def map_callback(self, msg):
         self.map_msg = msg
+
+    def costmap_callback(self, msg):
+        self.costmap_msg = msg
 
     def odom_callback(self, msg):
         self.robot_pose = (
@@ -200,7 +220,17 @@ class ExplorationNode(Node):
             )
             return
 
-        x, y, score, info_gain, cost, cluster_size = candidate
+        (
+            x,
+            y,
+            score,
+            info_gain,
+            cost,
+            cluster_size,
+            costmap_penalty,
+            costmap_max_cost,
+            far_goal_penalty,
+        ) = candidate
         msg = self.make_goal_msg(x, y)
         self.goal_pub.publish(msg)
         if bool(self.get_parameter("publish_direct_nav_goal").value):
@@ -216,6 +246,9 @@ class ExplorationNode(Node):
                 "score": score,
                 "information_gain": info_gain,
                 "cost": cost,
+                "costmap_penalty": costmap_penalty,
+                "costmap_max_cost": costmap_max_cost,
+                "far_goal_penalty": far_goal_penalty,
                 "cluster_size": cluster_size,
                 "frontier_cells": len(frontiers),
                 "frontier_clusters": len(clusters),
@@ -285,11 +318,33 @@ class ExplorationNode(Node):
         bootstrap_min_goal_distance = float(
             self.get_parameter("bootstrap_min_goal_distance").value
         )
+        preferred_goal_distance = float(
+            self.get_parameter("preferred_goal_distance_m").value
+        )
+        max_goal_distance = float(self.get_parameter("max_goal_distance_m").value)
+        allow_far_goal_fallback = bool(
+            self.get_parameter("allow_far_goal_fallback").value
+        )
+        fallback_max_goal_distance = float(
+            self.get_parameter("fallback_max_goal_distance_m").value
+        )
+        far_goal_penalty_weight = float(
+            self.get_parameter("far_goal_penalty_weight").value
+        )
         alpha = float(self.get_parameter("information_weight").value)
         beta = float(self.get_parameter("distance_weight").value)
+        gamma = float(self.get_parameter("costmap_penalty_weight").value)
+        allow_costmap_fallback = bool(
+            self.get_parameter("allow_costmap_fallback").value
+        )
+        blocked_costmap_penalty_weight = float(
+            self.get_parameter("blocked_costmap_penalty_weight").value
+        )
 
         best = None
         bootstrap_best = None
+        fallback_best = None
+        costmap_fallback_best = None
         for cluster in clusters:
             for fx, fy in self.sample_frontier_cells(cluster, robot_mx, robot_my):
                 safe_cell = self.find_safe_goal_cell(fx, fy, robot_mx, robot_my)
@@ -301,9 +356,73 @@ class ExplorationNode(Node):
                     continue
 
                 cost = math.hypot(wx - rx, wy - ry)
+                beyond_preferred_range = (
+                    max_goal_distance > 0.0 and cost > max_goal_distance
+                )
+                beyond_fallback_range = (
+                    fallback_max_goal_distance > 0.0
+                    and cost > fallback_max_goal_distance
+                )
+                if beyond_preferred_range and (
+                    not allow_far_goal_fallback or beyond_fallback_range
+                ):
+                    continue
+
+                (
+                    costmap_blocked,
+                    costmap_penalty,
+                    costmap_max_cost,
+                ) = self.evaluate_costmap_goal(wx, wy)
+
                 info_gain = self.estimate_information_gain(fx, fy)
-                score = alpha * info_gain - beta * cost
-                candidate = (wx, wy, score, info_gain, cost, len(cluster))
+                far_goal_penalty = 0.0
+                if preferred_goal_distance > 0.0 and cost > preferred_goal_distance:
+                    far_goal_penalty = (
+                        cost - preferred_goal_distance
+                    ) * far_goal_penalty_weight
+                score = (
+                    alpha * info_gain
+                    - beta * cost
+                    - gamma * costmap_penalty
+                    - far_goal_penalty
+                )
+                if costmap_blocked:
+                    if not allow_costmap_fallback:
+                        continue
+                    score -= costmap_max_cost * blocked_costmap_penalty_weight
+                    candidate = (
+                        wx,
+                        wy,
+                        score,
+                        info_gain,
+                        cost,
+                        len(cluster),
+                        costmap_penalty,
+                        costmap_max_cost,
+                        far_goal_penalty,
+                    )
+                    if (
+                        costmap_fallback_best is None
+                        or score > costmap_fallback_best[2]
+                    ):
+                        costmap_fallback_best = candidate
+                    continue
+
+                candidate = (
+                    wx,
+                    wy,
+                    score,
+                    info_gain,
+                    cost,
+                    len(cluster),
+                    costmap_penalty,
+                    costmap_max_cost,
+                    far_goal_penalty,
+                )
+                if beyond_preferred_range:
+                    if fallback_best is None or score > fallback_best[2]:
+                        fallback_best = candidate
+                    continue
                 if cost < min_goal_distance:
                     if cost >= bootstrap_min_goal_distance and (
                         bootstrap_best is None or cost > bootstrap_best[4]
@@ -313,7 +432,51 @@ class ExplorationNode(Node):
                 if best is None or score > best[2]:
                     best = candidate
 
-        return best or bootstrap_best, len(clusters)
+        return best or bootstrap_best or fallback_best or costmap_fallback_best, len(clusters)
+
+    def evaluate_costmap_goal(self, wx, wy):
+        if not bool(self.get_parameter("costmap_avoidance_enabled").value):
+            return False, 0.0, 0
+        if self.costmap_msg is None:
+            return False, 0.0, 0
+
+        mx, my = self.world_to_map(self.costmap_msg, wx, wy)
+        if mx is None:
+            return True, 100.0, 100
+
+        costmap = self.costmap_msg
+        resolution = costmap.info.resolution
+        radius = max(
+            1,
+            int(float(self.get_parameter("costmap_clearance_m").value) / resolution),
+        )
+        reject_threshold = int(self.get_parameter("costmap_reject_threshold").value)
+        width = costmap.info.width
+        height = costmap.info.height
+        data = costmap.data
+
+        max_cost = 0
+        total_cost = 0
+        samples = 0
+        for y in range(max(0, my - radius), min(height, my + radius + 1)):
+            for x in range(max(0, mx - radius), min(width, mx + radius + 1)):
+                if math.hypot(x - mx, y - my) > radius:
+                    continue
+                value = data[y * width + x]
+                if value < 0:
+                    continue
+                cost = max(0, min(100, int(value)))
+                max_cost = max(max_cost, cost)
+                total_cost += cost
+                samples += 1
+
+        if samples == 0:
+            return False, 0.0, 0
+
+        average_cost = total_cost / samples
+        blocked = max_cost >= reject_threshold
+        penalty = max_cost + 0.5 * average_cost
+        return blocked, penalty, max_cost
 
     def prioritize_frontier_clusters(self, clusters, robot_mx, robot_my):
         max_clusters = int(self.get_parameter("max_frontier_clusters_to_score").value)

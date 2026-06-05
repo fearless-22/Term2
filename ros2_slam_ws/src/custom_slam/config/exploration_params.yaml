@@ -15,6 +15,11 @@ exploration_node:
     min_frontier_cluster_size: 6
     min_goal_distance: 0.35
     bootstrap_min_goal_distance: 0.28
+    preferred_goal_distance_m: 6.0
+    max_goal_distance_m: 20000.0
+    allow_far_goal_fallback: true
+    fallback_max_goal_distance_m: 20000.0
+    far_goal_penalty_weight: 15.0
     goal_inset_m: 0.30
     goal_search_radius_m: 0.70
     obstacle_clearance_m: 0.20
@@ -23,7 +28,14 @@ exploration_node:
     failed_goal_blacklist_radius_m: 1.20
     failed_goal_blacklist_ttl_sec: 120.0
     failed_goal_blacklist_max_entries: 30
+    costmap_avoidance_enabled: true
+    costmap_topic: /global_costmap/costmap
+    costmap_clearance_m: 0.35
+    costmap_reject_threshold: 50
+    costmap_penalty_weight: 8.0
+    allow_costmap_fallback: true
+    blocked_costmap_penalty_weight: 25.0
     info_radius_m: 0.8
     information_weight: 1.0
-    distance_weight: 0.35
+    distance_weight: 0.65
     status_log_period_sec: 3.0
